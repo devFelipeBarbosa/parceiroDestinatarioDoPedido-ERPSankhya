@@ -98,7 +98,7 @@ public final class ResolvedorParceiroDestinatario {
      * fallback nao saberia escolher: com dois pedidos pendentes para destinos diferentes,
      * o CNPJ do texto diz qual deles.
      *
-     * O parceiro casado ainda precisa estar marcado como fornecedor (secao 37.4).
+     * O parceiro casado ainda precisa ser fornecedor e nao ser transportadora (secao 37.4).
      */
     private static Resultado porInfCpl(JdbcWrapper jdbc, String xml,
                                        List<PedidoCandidato> pendentes) throws Exception {
@@ -126,8 +126,8 @@ public final class ResolvedorParceiroDestinatario {
             if (cnpj.equals(cnpjEmitente) || cnpj.equals(cnpjDestinatario)) {
                 continue;
             }
-            // FORNECEDOR = 'S': transportadora citada na observacao e o falso positivo
-            // natural deste caminho, e transportadora nao e fornecedor.
+            // FORNECEDOR = 'S' e TRANSPORTADORA = 'N': transportadora citada na observacao
+            // e o falso positivo natural deste caminho.
             for (BigDecimal parceiro : PortalXmlRepository.fornecedoresPorDocumento(jdbc, cnpj)) {
                 if (destinatariosDePedido.contains(parceiro.stripTrailingZeros())) {
                     confirmados.add(parceiro);

@@ -60,15 +60,18 @@ public final class PortalXmlRepository {
       + " WHERE REGEXP_REPLACE(CGC_CPF, '[^0-9]', '') = ? AND ATIVO = 'S'";
 
     /**
-     * Mesma consulta, exigindo marcacao de fornecedor.
+     * Mesma consulta, exigindo fornecedor e recusando transportadora.
      *
      * Usada so pelo CNPJ vindo de texto livre: transportadora citada no corpo da observacao
-     * e o falso positivo natural desse caminho, e ela nao e fornecedor. O grupo &lt;entrega&gt;
-     * nao usa este filtro — ali o recebedor e declarado em campo proprio.
+     * e o falso positivo natural desse caminho. FORNECEDOR = 'S' ja elimina a maioria;
+     * TRANSPORTADORA = 'N' fecha o cadastro que acumula as duas marcacoes — com NVL, porque
+     * coluna nula ali significa "nao e transportadora", nao "descarta". O grupo
+     * &lt;entrega&gt; nao usa este filtro — ali o recebedor e declarado em campo proprio.
      */
     private static final String SQL_FORNECEDOR_POR_DOCUMENTO =
         "SELECT CODPARC FROM TGFPAR"
-      + " WHERE REGEXP_REPLACE(CGC_CPF, '[^0-9]', '') = ? AND ATIVO = 'S' AND FORNECEDOR = 'S'";
+      + " WHERE REGEXP_REPLACE(CGC_CPF, '[^0-9]', '') = ?"
+      + "   AND ATIVO = 'S' AND FORNECEDOR = 'S' AND NVL(TRANSPORTADORA, 'N') = 'N'";
 
     /** ponytail: teto de linhas lidas. Parceiro com mais pedidos pendentes que isso ja e ambiguidade. */
     private static final int LIMITE_CANDIDATOS = 50;
