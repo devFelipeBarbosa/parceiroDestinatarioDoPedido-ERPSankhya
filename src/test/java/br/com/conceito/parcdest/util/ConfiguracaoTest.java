@@ -79,14 +79,19 @@ class ConfiguracaoTest {
     }
 
     @Test
-    void fallbackAusenteSegueORegraDoPortal() {
-        assertEquals(Configuracao.Fallback.ANTIGO, Configuracao.parse(new Properties()).fallback());
+    void fallbackAusenteNaoAbreAOpcaoArriscada() {
+        assertEquals(Configuracao.Fallback.UNICO, Configuracao.parse(new Properties()).fallback());
     }
 
     @Test
     void fallbackAceitaOsTresModos() {
         assertEquals(Configuracao.Fallback.OFF, Configuracao.parse(props("fallback", "OFF")).fallback());
         assertEquals(Configuracao.Fallback.UNICO, Configuracao.parse(props("fallback", " unico ")).fallback());
-        assertEquals(Configuracao.Fallback.ANTIGO, Configuracao.parse(props("fallback", "ON")).fallback());
+        assertEquals(Configuracao.Fallback.ANTIGO, Configuracao.parse(props("fallback", "antigo")).fallback());
+    }
+
+    @Test
+    void fallbackIrreconhecivelCaiNoModoSeguro() {
+        assertEquals(Configuracao.Fallback.UNICO, Configuracao.parse(props("fallback", "talvez")).fallback());
     }
 }

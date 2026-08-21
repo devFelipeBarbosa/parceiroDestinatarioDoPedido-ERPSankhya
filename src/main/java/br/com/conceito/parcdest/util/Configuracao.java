@@ -24,9 +24,9 @@ import java.util.Set;
  * tracing=ON            # registra os eventos da TGFCAB no log (nao altera dado)
  * workaround=OFF        # FASE 2: preenche CODPARCDEST. Manter OFF ate a fase 1 concluir.
  * tops=1419             # TOPs elegiveis, separadas por virgula
- * fallback=ANTIGO       # sem xPed utilizavel: ANTIGO (pedido pendente mais antigo do
- *                       # parceiro, igual ao Portal), UNICO (so quando os pendentes
- *                       # convergem para o mesmo destinatario) ou OFF (nao infere)
+ * fallback=UNICO        # sem xPed nem <entrega>: UNICO (so quando os pendentes convergem
+ *                       # para o mesmo destinatario), ANTIGO (mais antigo, igual ao Portal)
+ *                       # ou OFF (nao infere)
  * camposExtras=         # campos extras da TGFCAB a registrar no log, separados por virgula
  * </pre>
  */
@@ -100,19 +100,24 @@ public final class Configuracao {
             fallback(props.getProperty("fallback")));
     }
 
-    /** Ausente ou irreconhecivel vale ANTIGO: e a regra que o proprio Portal aplica. */
+    /**
+     * Ausente vale UNICO: com pedidos pendentes convergindo para o mesmo destinatario nao ha
+     * o que errar, e havendo divergencia a decisao volta para o xPed. ANTIGO existe para
+     * quem aceitar reproduzir o "Ligar pedidos mais antigos" do Portal com os olhos abertos.
+     */
     private static Fallback fallback(String valor) {
         if (valor == null) {
-            return Fallback.ANTIGO;
+            return Fallback.UNICO;
         }
         String v = valor.trim();
         if ("OFF".equalsIgnoreCase(v) || "N".equalsIgnoreCase(v) || "false".equalsIgnoreCase(v)) {
             return Fallback.OFF;
         }
-        if ("UNICO".equalsIgnoreCase(v) || "ÚNICO".equalsIgnoreCase(v)) {
-            return Fallback.UNICO;
+        if ("ANTIGO".equalsIgnoreCase(v) || "ON".equalsIgnoreCase(v) || "S".equalsIgnoreCase(v)) {
+            return Fallback.ANTIGO;
         }
-        return Fallback.ANTIGO;
+        // Valor irreconhecivel nao pode abrir a opcao mais arriscada.
+        return Fallback.UNICO;
     }
 
     private static boolean ligado(String valor, boolean padrao) {

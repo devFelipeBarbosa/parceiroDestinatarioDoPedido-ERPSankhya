@@ -65,21 +65,28 @@ A análise funcional completa é documento interno do projeto e não acompanha e
              │
              ├─ 1. TGFIXN.CODPARCDEST > 0 ────► usa    (escolha do usuário na tela)
              │
-             ├─ 2. extrai <compra><xPed>              (indexOf, sem parser)
+             ├─ 2. xPed de <compra> (ZC) + de cada <det><prod> (I05)
              │     SELECT DISTINCT CODPARCDEST FROM TGFCAB
-             │        WHERE NUMNOTA = :xPed
+             │        WHERE NUMNOTA IN (:xPeds)
              │          AND CODPARC = :codparc AND CODEMP = :codemp
              │          AND TIPMOV = 'O' AND PENDENTE = 'S'
              │     ├─ 1 valor > 0 ──► usa
-             │     ├─ 2+ valores ───► NÃO atua + log     (divergência declarada)
+             │     ├─ 2+ valores ───► NÃO atua + log     (documento ambíguo, encerra)
              │     └─ 0 linhas / sem xPed / valor 0 ──► cai para 3
              │
-             ├─ 3. fallback: SELECT NUNOTA, NUMNOTA, CODPARCDEST FROM TGFCAB
+             ├─ 3. <entrega><CNPJ> — o recebedor, dito pelo emitente
+             │     SELECT CODPARC FROM TGFPAR
+             │        WHERE só-dígitos(CGC_CPF) = :cnpj AND ATIVO = 'S'
+             │     ├─ 1 parceiro ──► usa
+             │     ├─ 2+ ─────────► NÃO atua + log        (cadastro duplicado, encerra)
+             │     └─ 0 / sem grupo <entrega> ──► cai para 4
+             │
+             ├─ 4. fallback: SELECT NUNOTA, NUMNOTA, CODPARCDEST FROM TGFCAB
              │        WHERE CODPARC = :codparc AND CODEMP = :codemp
              │          AND TIPMOV = 'O' AND PENDENTE = 'S' AND CODPARCDEST > 0
              │        ORDER BY DTNEG, NUNOTA        ← o pendente mais antigo
-             │     ├─ ANTIGO ─► usa a 1ª linha       (regra do próprio Portal)
-             │     ├─ UNICO ──► usa só se todos convergirem
+             │     ├─ UNICO ──► usa só se todos convergirem   (default)
+             │     ├─ ANTIGO ─► usa a 1ª linha                (regra do Portal)
              │     └─ OFF ────► não atua + log
              │
              └─ vo.setProperty("CODPARCDEST", valor)
@@ -113,15 +120,15 @@ src/main/java/br/com/conceito/parcdest/
 ├── service/
 │   └── ResolvedorParceiroDestinatario.java   Regra de resolução e fail-safe.
 ├── repository/
-│   └── PortalXmlRepository.java             As três consultas. Somente leitura.
+│   └── PortalXmlRepository.java             As quatro consultas. Somente leitura.
 └── util/
-    ├── XmlNfe.java        Extração do <xPed> do CLOB.
+    ├── XmlNfe.java        Extrai xPed (ZC e I05) e <entrega> do CLOB.
     ├── Configuracao.java  Feature flag e escopo, relidos do disco a cada 60s.
     └── Log.java           Arquivo no Repositório de Arquivos do Sankhya.
 
 src/test/java/.../util/
-├── ConfiguracaoTest.java   9 testes
-└── XmlNfeTest.java         4 testes
+├── ConfiguracaoTest.java   10 testes
+└── XmlNfeTest.java         10 testes
 
 config/parcdest.properties      Arquivo de configuração pronto para subir ao Repositório.
 xml/preparar_xml_simulacao.py   Adapta um XML modelo para importar em outra base.
@@ -146,11 +153,14 @@ fallback=ANTIGO       # quando o xPed não resolve: ANTIGO | UNICO | OFF
 camposExtras=         # campos extras da TGFCAB a registrar no log
 ```
 
-| `fallback` | Comportamento quando o `xPed` não resolve o pedido |
+| `fallback` | Comportamento quando nem o `xPed` nem o `<entrega>` resolvem |
 |---|---|
-| `ANTIGO` (default) | Usa o pedido pendente mais antigo do parceiro. É a mesma regra do botão **Ligar pedidos mais antigos** do Portal. |
-| `UNICO` | Só atua se todos os pedidos pendentes do parceiro apontarem para o mesmo destinatário. Recusa a ambiguidade. |
-| `OFF` | Só atua por `TGFIXN.CODPARCDEST` ou `xPed`. Nenhuma inferência. |
+| `UNICO` (default) | Só atua se todos os pedidos pendentes do parceiro apontarem para o mesmo destinatário. Havendo divergência, não grava. |
+| `ANTIGO` | Usa o pedido pendente mais antigo do parceiro — a regra do botão **Ligar pedidos mais antigos** do Portal. Grava mesmo sob ambiguidade. |
+| `OFF` | Nenhuma inferência. Só as três origens declaradas no documento. |
+
+Valor irreconhecível cai em `UNICO`: erro de digitação no properties não pode abrir a opção
+mais arriscada.
 
 Arquivo, e não parâmetro de sistema, por decisão de arquitetura: desligar não
 exige alteração de banco, de objeto standard, nem recompilação.
@@ -174,7 +184,7 @@ TGFCAB e `NUMPEDIDO`/`NUMPEDIDO2` ficam vazios em todo o fluxo.
 O que sobra — e basta — é a `CHAVENFE`, presente no VO desde o `BEFORE_INSERT`. Ela endereça
 o registro da `TGFIXN`, gravado ~12 minutos antes da nota existir, com o XML íntegro.
 
-### 3. Três origens, e cada uma sabe o quanto vale
+### 3. Quatro origens, e cada uma sabe o quanto vale
 
 O `xPed` é o mesmo campo que o próprio Portal usa para casar o pedido, apenas antecipado —
 enquanto ele resolver, é ele que manda. Só que **o fornecedor não é obrigado a preencher o
@@ -184,19 +194,33 @@ Foi o caso do teste com `xPed=4`: `motivo=PEDIDO_NAO_ENCONTRADO`, nota nascida c
 
 Daí a cadeia:
 
-| # | Origem | Natureza |
-|---|---|---|
-| 1 | `TGFIXN.CODPARCDEST` | Escolha explícita do usuário na tela do Portal. Não é inferência. |
-| 2 | `<compra><xPed>` | Determinística. O documento diz qual é o pedido. |
-| 3 | Pedido pendente mais antigo do parceiro | Inferência — a mesma que o Portal aplica em **Ligar pedidos mais antigos**. |
+| # | Origem | Grupo no layout | Natureza |
+|---|---|---|---|
+| 1 | `TGFIXN.CODPARCDEST` | — | Escolha explícita do usuário na tela do Portal. |
+| 2 | `xPed` do documento **e de cada item** | ZC01 e I05 | Determinística. O emitente diz qual é o pedido. |
+| 3 | `<entrega>` CNPJ/CPF do recebedor | G | Determinística. O emitente diz para quem entregou. |
+| 4 | Pedido pendente do parceiro | — | Inferência. |
 
-A origem 3 é declaradamente inferência, e por isso é a única governada por flag
-(`fallback`), a única que registra `pendentes=` e `divergentes=` no log, e a única que pode
-ser desligada sem desligar o componente.
+**O `xPed` é lido em dois lugares.** O grupo `<compra>` (ZC01) traz o pedido do documento
+inteiro; o grupo I05 traz `xPed` e `nItemPed` **dentro de cada `<det><prod>`**. Boa parte dos
+ERPs emissores preenche só o segundo — é o campo que existe justamente para o comprador casar
+nota com pedido. Ler apenas `<compra>` descarta esses documentos sem necessidade.
 
-**Divergência no `xPed` não cai para o fallback.** Se o número do pedido casa dois pedidos
-com destinatários diferentes, o documento está ambíguo; trocar isso por "então pega o mais
-antigo" seria transformar recusa em chute. Nesse caminho o componente não atua.
+**O grupo `<entrega>` é a fonte mais forte que existe para esse campo.** Ele só aparece
+quando a entrega é em endereço diferente do destinatário — exatamente o caso do estoque de
+terceiros — e, quando aparece, o CNPJ/CPF do recebedor é **obrigatório**. Ou seja: o
+documento identifica o parceiro destinatário sem depender de pedido nenhum. E a obrigação é
+fiscal, não comercial: fornecedor que entrega em terceiro e não preenche o grupo G está
+irregular, o que é uma alavanca de cobrança bem mais firme que pedir `xPed`.
+
+A origem 4 é a única inferência, e por isso é a única governada por flag (`fallback`), a
+única que registra `pendentes=` e `divergentes=` no log, e a única que pode ser desligada sem
+desligar o componente.
+
+**Ambiguidade encerra a cadeia, não avança para a origem seguinte.** Se os `xPed` do
+documento casam pedidos com destinatários diferentes, ou se o CNPJ de entrega casa dois
+cadastros ativos, o componente não atua. Descer para a próxima origem nesse caso trocaria uma
+recusa por um chute.
 
 ### 4. `TIPMOV='O'` e `PENDENTE='S'` — a mesma regra do Portal
 
@@ -284,7 +308,8 @@ do log.
 | Tabela | Uso |
 |---|---|
 | `TGFCAB` | Cabeçalho da nota (entidade do evento) e do Pedido de Compra (consulta) |
-| `TGFIXN` | Arquivo do Portal de Importação de XML: `CHAVEACESSO`, `XML` (CLOB), `CONFIG` |
+| `TGFIXN` | Arquivo do Portal de Importação de XML: `CHAVEACESSO`, `XML` (CLOB), `CODPARCDEST` |
+| `TGFPAR` | Parceiro pelo CNPJ/CPF do grupo `<entrega>`: `CGC_CPF`, `ATIVO` |
 | `TGFTOP` | Origem da condição da trigger: `ATUALESTTERC`, `CODCFO_ENTRADA` |
 | `TGFVAR` | Vínculo nota × pedido. Evidência e reconciliação, nunca fonte no ponto de extensão |
 | `TSIPAR` | `CONCNPJIEIMPXML`, `TOPIMPORTXML` — parâmetros do Portal |
@@ -339,7 +364,7 @@ Log em `<SW Repository>/personalizacao/parcdest/logAAAA-MM-DD-PARCDEST-TRACE.txt
 2. `workaround=ON`, esperar 60s, apagar a nota, importar de novo.
    Esperado no log:
    ```
-   workaround=RESOLVIDO origem=XPED xPed=<n> CODPARCDEST=<n>
+   workaround=RESOLVIDO origem=XPED xPeds=[<n>] CODPARCDEST=<n>
    workaround=APLICADO  NUNOTA=<n> ...
    AFTER_INSERT ... CODPARCDEST=<n>
    ```
@@ -350,8 +375,9 @@ Log em `<SW Repository>/personalizacao/parcdest/logAAAA-MM-DD-PARCDEST-TRACE.txt
 5. Repetir com o `xPed` apontando para um pedido inexistente. Esperado: o `xPed` desiste, o
    fallback assume, e a nota nasce preenchida do mesmo jeito:
    ```
-   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPed=4 CODPARC=7 CODEMP=1
-   workaround=RESOLVIDO origem=PEDIDO_MAIS_ANTIGO NUNOTA=96 NUMNOTA=96 CODPARCDEST=8 pendentes=1 divergentes=N
+   workaround=xPed     motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4] CODPARC=7 CODEMP=1
+   workaround=entrega  motivo=XML_SEM_ENTREGA
+   workaround=RESOLVIDO origem=PEDIDO_MAIS_ANTIGO NUNOTA=96 NUMNOTA=1 CODPARCDEST=8 pendentes=1 divergentes=N
    ```
 
 O log distingue o que é desistência de etapa do que é não-atuação do componente:
@@ -361,26 +387,32 @@ workaround=xPed  motivo=...     ← a etapa 2 desistiu, o fallback ainda vai rod
 workaround=SKIP  motivo=...     ← o componente não atua, a nota nasce com 0
 ```
 
-Desistências da etapa `xPed`:
+Desistências de etapa — a cadeia continua na origem seguinte:
 
 ```
-workaround=xPed motivo=XML_SEM_XPED
-workaround=xPed motivo=XPED_NAO_NUMERICO xPed=...
-workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPed=... CODPARC=... CODEMP=...
-workaround=xPed motivo=PEDIDO_SEM_DESTINATARIO xPed=...
+workaround=xPed     motivo=XML_SEM_XPED
+workaround=xPed     motivo=XPED_NAO_NUMERICO xPeds=[...]
+workaround=xPed     motivo=PEDIDO_NAO_ENCONTRADO xPeds=[...] CODPARC=... CODEMP=...
+workaround=xPed     motivo=PEDIDO_SEM_DESTINATARIO xPeds=[...]
+workaround=entrega  motivo=XML_SEM_ENTREGA
+workaround=entrega  motivo=PARCEIRO_NAO_CADASTRADO doc=**********0144
 ```
 
-Não-atuação do componente:
+Não-atuação do componente — a nota nasce com `0`:
 
 ```
 workaround=SKIP motivo=SEM_CHAVENFE
 workaround=SKIP motivo=SEM_PARCEIRO_OU_EMPRESA
 workaround=SKIP motivo=XML_NAO_ENCONTRADO chave=...
-workaround=SKIP motivo=DESTINATARIOS_DIVERGENTES xPed=... candidatos=[...]
+workaround=SKIP motivo=DESTINATARIOS_DIVERGENTES xPeds=[...] candidatos=[...]
+workaround=SKIP motivo=PARCEIROS_DUPLICADOS doc=... candidatos=[...]
 workaround=SKIP motivo=FALLBACK_DESLIGADO
 workaround=SKIP motivo=SEM_PEDIDO_PENDENTE CODPARC=... CODEMP=...
 workaround=SKIP motivo=PENDENTES_DIVERGENTES CODPARC=... pedidos=... modo=UNICO
 ```
+
+O CNPJ/CPF sai mascarado no log — os quatro últimos dígitos bastam para o suporte achar o
+registro.
 
 ---
 

@@ -48,6 +48,17 @@ public final class PortalXmlRepository {
       + "   AND TIPMOV = 'O' AND PENDENTE = 'S' AND CODPARCDEST > 0"
       + " ORDER BY DTNEG, NUNOTA";
 
+    /**
+     * Parceiro pelo CNPJ/CPF do grupo &lt;entrega&gt;.
+     *
+     * ponytail: REGEXP_REPLACE na coluna ignora indice, porque nao ha garantia de que o
+     * cadastro esteja sem mascara. TGFPAR e pequena o bastante. Se pesar, criar indice
+     * funcional sobre a mesma expressao.
+     */
+    private static final String SQL_PARCEIRO_POR_DOCUMENTO =
+        "SELECT CODPARC FROM TGFPAR"
+      + " WHERE REGEXP_REPLACE(CGC_CPF, '[^0-9]', '') = ? AND ATIVO = 'S'";
+
     /** ponytail: teto de linhas lidas. Parceiro com mais pedidos pendentes que isso ja e ambiguidade. */
     private static final int LIMITE_CANDIDATOS = 50;
 
@@ -113,6 +124,26 @@ public final class PortalXmlRepository {
                 while (resultado.next()) {
                     BigDecimal valor = resultado.getBigDecimal(1);
                     encontrados.add(valor == null ? BigDecimal.ZERO : valor);
+                }
+            } finally {
+                resultado.close();
+            }
+        } finally {
+            consulta.close();
+        }
+        return encontrados;
+    }
+
+    /** Parceiros ativos com esse CNPJ/CPF. Mais de um = cadastro duplicado, quem chama decide. */
+    public static List<BigDecimal> parceirosPorDocumento(JdbcWrapper jdbc, String documento) throws Exception {
+        List<BigDecimal> encontrados = new ArrayList<BigDecimal>(1);
+        PreparedStatement consulta = jdbc.getPreparedStatement(SQL_PARCEIRO_POR_DOCUMENTO);
+        try {
+            consulta.setString(1, documento);
+            ResultSet resultado = consulta.executeQuery();
+            try {
+                while (resultado.next()) {
+                    encontrados.add(resultado.getBigDecimal(1));
                 }
             } finally {
                 resultado.close();
