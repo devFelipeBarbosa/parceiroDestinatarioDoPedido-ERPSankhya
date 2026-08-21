@@ -326,6 +326,7 @@ Nada aqui foi deduzido. A sequência de testes, em ordem:
 | 17 | XML com `xPed` **e** `nItemPed` no item | O Portal passa a **vincular o pedido sozinho** — aba Pedidos com `Vinculado 8.002,64 / Não vinculado 0,0000`, sem clicar em nada. `nItemPed` é a âncora que faltava, porque a `TGFVAR` é item × item. |
 | 18 | **O mesmo XML com `workaround=OFF`** | Nota nasce `CODPARCDEST=0` e **permanece 0** no ciclo inteiro. O Portal vincula o pedido e ainda assim não propaga o destinatário. |
 | 19 | XML com grupo `<entrega>`, pedido do `xPed` inexistente | Origem 3 resolve pelo CNPJ do recebedor. E como o pedido estava **não pendente**, as origens 4 e 5 nem podiam agir — o filtro `PENDENTE='S'` foi exercitado por acidente e segurou. |
+| 20 | `TGFIXN.CODPARCDEST` gravado entre importar e processar | Origem 1 atua e **encerra a cadeia numa linha só**. Provou a precedência: o XML tinha `xPed` no item e nem foi lido. |
 
 Cinco caminhos homologados em base real:
 
@@ -339,7 +340,19 @@ nota 103   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
 nota 104   workaround=RESOLVIDO origem=XPED xPeds=[1] CODPARCDEST=8      (xPed do item, grupo I05)
 nota 107   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
            workaround=RESOLVIDO origem=ENTREGA doc=**********0173 CODPARCDEST=8
+nota 110   workaround=RESOLVIDO origem=PORTAL_TGFIXN CODPARCDEST=1
 ```
+
+E o caminho de não-atuação completo, quando nenhuma origem resolve (notas 108 e 109):
+
+```
+workaround=xPed     motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4] CODPARC=7 CODEMP=1
+workaround=entrega  motivo=XML_SEM_ENTREGA
+workaround=infCpl   motivo=SEM_CNPJ_NO_TEXTO
+workaround=SKIP     motivo=SEM_PEDIDO_PENDENTE CODPARC=7 CODEMP=1
+```
+
+Nota nasce com `0`, sem erro, sem `ORA-20101`. 8 ms.
 
 Em todos, zero `UPDATE` de `CODPARCDEST` em toda a transação e zero `ORA-20101`. Os pares
 `BEFORE/AFTER_UPDATE` seguintes já nascem com o valor certo.
@@ -488,16 +501,14 @@ Roteiro detalhado é documento interno. Em resumo:
 1. **Ambiguidade real.** Dois pedidos pendentes do mesmo fornecedor com destinatários
    diferentes. É onde a origem 4 desempata o que o fallback recusaria, e o único cenário
    com risco de gravar o parceiro errado. Ainda não exercitado.
-2. **Origem 1.** `TGFIXN.CODPARCDEST` preenchido pelo usuário na tela do Portal — única
-   origem ainda não exercitada.
-3. **Exercitar os caminhos de não-atuação.**
-4. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
-5. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
+2. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
+3. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
    formato de `TIPMOV`/`PENDENTE`.
-6. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
+4. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
 
-Já fechados: origens 2 (notas 100 e 104), 3 (107), 4 (103) e 5 (102), e o kill switch em
-runtime sem restart (105).
+**Todas as cinco origens já foram exercitadas em base real** — notas 110, 100, 104, 107, 103
+e 102 — junto com o caminho de não-atuação completo (108, 109) e o kill switch em runtime sem
+restart (105).
 
 ---
 
@@ -517,6 +528,7 @@ runtime sem restart (105).
 | 21/08/2026 | `nItemPed` provado como a âncora do vínculo automático do Portal |
 | 21/08/2026 | Provado que nem com vínculo automático o Portal propaga o destinatário; kill switch homologado |
 | 21/08/2026 | Origem `ENTREGA` homologada; filtro `PENDENTE='S'` exercitado com pedido já atendido |
+| 21/08/2026 | Origem `PORTAL_TGFIXN` homologada; cadeia completa exercitada em base real |
 
 ---
 
