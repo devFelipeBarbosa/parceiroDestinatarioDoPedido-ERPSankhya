@@ -323,6 +323,8 @@ Nada aqui foi deduzido. A sequência de testes, em ordem:
 | 14 | Layout NF-e conferido | `xPed` existe em dois grupos (ZC01 e I05) e o grupo G (`<entrega>`) traz CNPJ obrigatório do recebedor. Duas fontes que não estavam sendo lidas. |
 | 15 | Observação da nota lida na Central | O emitente descreve o recebedor em texto livre, com CNPJ, e **não** usa o grupo G. |
 | 16 | `TGFPAR` consultada | O CNPJ da observação **é** o parceiro destinatário. `CGC_CPF` sem máscara; destinatário com `FORNECEDOR='S'` e `TRANSPORTADORA='N'`. |
+| 17 | XML com `xPed` **e** `nItemPed` no item | O Portal passa a **vincular o pedido sozinho** — aba Pedidos com `Vinculado 8.002,64 / Não vinculado 0,0000`, sem clicar em nada. `nItemPed` é a âncora que faltava, porque a `TGFVAR` é item × item. |
+| 18 | **O mesmo XML com `workaround=OFF`** | Nota nasce `CODPARCDEST=0` e **permanece 0** no ciclo inteiro. O Portal vincula o pedido e ainda assim não propaga o destinatário. |
 
 Três origens homologadas em base real:
 
@@ -337,6 +339,20 @@ nota 103   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
 
 Nos três, zero `UPDATE` de `CODPARCDEST` em toda a transação e zero `ORA-20101`. Os pares
 `BEFORE/AFTER_UPDATE` seguintes já nascem com o valor certo.
+
+E o contraexemplo que fecha o diagnóstico — mesmo documento, `workaround=OFF`:
+
+```
+nota 105   BEFORE_INSERT  CODPARCDEST=0
+           AFTER_INSERT   CODPARCDEST=0
+           BEFORE_UPDATE  CODPARCDEST=0
+           AFTER_UPDATE   CODPARCDEST=0
+```
+
+Seis linhas, nenhuma `workaround=`. **O Portal vinculou o pedido automaticamente e ainda
+assim entregou a nota com o campo zerado.** Documento fiscal completo, vínculo feito pelo
+próprio Portal, pedido de origem com o destinatário preenchido, nenhuma ação do usuário — e o
+campo continua `0`. É a reprodução mais limpa do defeito, e a que serve de anexo ao chamado.
 
 Custo `BEFORE_INSERT` → `AFTER_INSERT`: **~50 ms**, estável independente de quantas origens a
 cadeia percorre. A primeira medição de 330 ms era o custo de aquecimento da primeira
@@ -468,14 +484,16 @@ Roteiro detalhado é documento interno. Em resumo:
 1. **Ambiguidade real.** Dois pedidos pendentes do mesmo fornecedor com destinatários
    diferentes. É onde a origem 4 desempata o que o fallback recusaria, e o único cenário
    com risco de gravar o parceiro errado. Ainda não exercitado.
-2. **Origens 2-item e 3.** `xPed` dentro de `<det><prod>` e grupo `<entrega>` — escritas,
-   cobertas por teste unitário, sem documento real que as acione até agora.
+2. **Origem 3.** Grupo `<entrega>` — escrita, coberta por teste unitário, sem documento real
+   que a acione até agora.
 3. **Exercitar os caminhos de não-atuação.**
 4. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
-5. Testar `workaround=OFF` em runtime — o kill switch precisa funcionar sem restart.
-6. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
+5. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
    formato de `TIPMOV`/`PENDENTE`.
-7. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
+6. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
+
+Já fechados: kill switch em runtime sem restart (nota 105) e origem 2 pelo grupo I05
+(nota 104).
 
 ---
 
@@ -492,6 +510,8 @@ Roteiro detalhado é documento interno. Em resumo:
 | 20/08/2026 | `xPed` inexistente reproduziu o bug; fallback por pedido pendente adicionado e homologado |
 | 21/08/2026 | Origens `xPed` de item (I05) e grupo `<entrega>` adicionadas; default do `fallback` passou a `UNICO` |
 | 21/08/2026 | Origem `INFCPL_PEDIDO` adicionada e homologada, com filtro `FORNECEDOR='S'` / `TRANSPORTADORA='N'` |
+| 21/08/2026 | `nItemPed` provado como a âncora do vínculo automático do Portal |
+| 21/08/2026 | Provado que nem com vínculo automático o Portal propaga o destinatário; kill switch homologado |
 
 ---
 
