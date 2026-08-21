@@ -59,6 +59,17 @@ public final class PortalXmlRepository {
         "SELECT CODPARC FROM TGFPAR"
       + " WHERE REGEXP_REPLACE(CGC_CPF, '[^0-9]', '') = ? AND ATIVO = 'S'";
 
+    /**
+     * Mesma consulta, exigindo marcacao de fornecedor.
+     *
+     * Usada so pelo CNPJ vindo de texto livre: transportadora citada no corpo da observacao
+     * e o falso positivo natural desse caminho, e ela nao e fornecedor. O grupo &lt;entrega&gt;
+     * nao usa este filtro — ali o recebedor e declarado em campo proprio.
+     */
+    private static final String SQL_FORNECEDOR_POR_DOCUMENTO =
+        "SELECT CODPARC FROM TGFPAR"
+      + " WHERE REGEXP_REPLACE(CGC_CPF, '[^0-9]', '') = ? AND ATIVO = 'S' AND FORNECEDOR = 'S'";
+
     /** ponytail: teto de linhas lidas. Parceiro com mais pedidos pendentes que isso ja e ambiguidade. */
     private static final int LIMITE_CANDIDATOS = 50;
 
@@ -136,8 +147,17 @@ public final class PortalXmlRepository {
 
     /** Parceiros ativos com esse CNPJ/CPF. Mais de um = cadastro duplicado, quem chama decide. */
     public static List<BigDecimal> parceirosPorDocumento(JdbcWrapper jdbc, String documento) throws Exception {
+        return porDocumento(jdbc, SQL_PARCEIRO_POR_DOCUMENTO, documento);
+    }
+
+    /** Idem, restrito a quem esta marcado como fornecedor. */
+    public static List<BigDecimal> fornecedoresPorDocumento(JdbcWrapper jdbc, String documento) throws Exception {
+        return porDocumento(jdbc, SQL_FORNECEDOR_POR_DOCUMENTO, documento);
+    }
+
+    private static List<BigDecimal> porDocumento(JdbcWrapper jdbc, String sql, String documento) throws Exception {
         List<BigDecimal> encontrados = new ArrayList<BigDecimal>(1);
-        PreparedStatement consulta = jdbc.getPreparedStatement(SQL_PARCEIRO_POR_DOCUMENTO);
+        PreparedStatement consulta = jdbc.getPreparedStatement(sql);
         try {
             consulta.setString(1, documento);
             ResultSet resultado = consulta.executeQuery();

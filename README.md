@@ -82,6 +82,7 @@ A análise funcional completa é documento interno do projeto e não acompanha e
              │     └─ 0 / sem grupo <entrega> ──► cai para 4
              │
              ├─ 4. CNPJ no <infAdic><infCpl> — DV validado, sem emit/dest
+             │     TGFPAR com ATIVO='S' e FORNECEDOR='S'
              │     ∩ com os CODPARCDEST dos pedidos pendentes do fornecedor
              │     ├─ 1 na interseção ──► usa
              │     ├─ 2+ ──────────────► NÃO atua + log (encerra)
@@ -205,7 +206,7 @@ Daí a cadeia:
 | 1 | `TGFIXN.CODPARCDEST` | — | Escolha explícita do usuário na tela do Portal. |
 | 2 | `xPed` do documento **e de cada item** | ZC01 e I05 | Determinística. O emitente diz qual é o pedido. |
 | 3 | `<entrega>` CNPJ/CPF do recebedor | G | Determinística. O emitente diz para quem entregou. |
-| 4 | CNPJ no `<infCpl>` **∩** destinatário de pedido pendente | Z (texto livre) | Duas fontes independentes concordando. |
+| 4 | CNPJ no `<infCpl>`, fornecedor ativo, **∩** destinatário de pedido pendente | Z (texto livre) | Duas fontes independentes concordando. |
 | 5 | Pedido pendente do parceiro | — | Inferência. |
 
 **O `xPed` é lido em dois lugares.** O grupo `<compra>` (ZC01) traz o pedido do documento
@@ -228,13 +229,18 @@ resto:
 1. Extrai sequências de 14 dígitos do `infCpl` (com ou sem máscara).
 2. Valida o DV módulo 11 — número solto, IE e chave de acesso caem fora sozinhos.
 3. Descarta o CNPJ do emitente e o do destinatário, ambos lidos do próprio XML.
-4. Casa contra `TGFPAR` e **intersecta com os destinatários dos Pedidos de Compra pendentes
-   daquele fornecedor**.
+4. Casa contra `TGFPAR` exigindo `ATIVO='S'` **e `FORNECEDOR='S'`**.
+5. **Intersecta com os destinatários dos Pedidos de Compra pendentes daquele fornecedor.**
 
 Nenhuma das duas pontas decide sozinha. Texto livre pode citar transportadora, matriz,
 filial. Pedido pendente sozinho é o chute que a origem 5 assume. Juntas, uma confirma a
 outra — e resolvem justamente o caso em que a origem 5 não saberia escolher: com dois pedidos
 pendentes para destinos diferentes, o CNPJ do texto diz qual é.
+
+O `FORNECEDOR='S'` fecha o falso positivo natural desse caminho: transportadora citada na
+observação é o que mais aparece em texto livre, e transportadora não é fornecedor. O filtro
+vale **só** para esta origem — no grupo `<entrega>` o recebedor vem em campo próprio, sem
+concorrência.
 
 Sem flag própria: a origem só atua quando as duas fontes concordam, e `workaround=OFF` já
 desliga tudo.
@@ -335,7 +341,7 @@ do log.
 |---|---|
 | `TGFCAB` | Cabeçalho da nota (entidade do evento) e do Pedido de Compra (consulta) |
 | `TGFIXN` | Arquivo do Portal de Importação de XML: `CHAVEACESSO`, `XML` (CLOB), `CODPARCDEST` |
-| `TGFPAR` | Parceiro pelo CNPJ/CPF do `<entrega>` ou do `<infCpl>`: `CGC_CPF`, `ATIVO` |
+| `TGFPAR` | Parceiro pelo CNPJ/CPF do `<entrega>` ou do `<infCpl>`: `CGC_CPF`, `ATIVO`, `FORNECEDOR` |
 | `TGFTOP` | Origem da condição da trigger: `ATUALESTTERC`, `CODCFO_ENTRADA` |
 | `TGFVAR` | Vínculo nota × pedido. Evidência e reconciliação, nunca fonte no ponto de extensão |
 | `TSIPAR` | `CONCNPJIEIMPXML`, `TOPIMPORTXML` — parâmetros do Portal |
