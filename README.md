@@ -123,6 +123,7 @@ src/test/java/.../util/
 ├── ConfiguracaoTest.java   9 testes
 └── XmlNfeTest.java         4 testes
 
+config/parcdest.properties      Arquivo de configuração pronto para subir ao Repositório.
 xml/preparar_xml_simulacao.py   Adapta um XML modelo para importar em outra base.
 ```
 
@@ -133,8 +134,9 @@ evento nem TGFCAB, e roda fora do servidor — por isso é a única camada com t
 
 ## Configuração
 
-`<SW Repository>/personalizacao/parcdest/parcdest.properties` — opcional, relido a cada 60s.
-Ausente = default seguro.
+Arquivo pronto em **`config/parcdest.properties`**. Subir pelo Repositório de Arquivos para
+`personalizacao/parcdest/` — mesma pasta onde o log é gravado. Relido a cada 60s, sem
+restart. Ausente = default seguro (`tracing=ON`, `workaround=OFF`).
 
 ```properties
 tracing=ON            # registra eventos da TGFCAB no log
@@ -321,7 +323,9 @@ Get-ChildItem -Path <wildfly> -Recurse -Filter jape-*.jar |
 3. Cadastrar o Evento Programável:
    - Entidade: **CabecalhoNota** (`TGFCAB`)
    - Classe: `br.com.conceito.parcdest.event.ParceiroDestinatarioTracer`
-4. Criar `parcdest.properties` no Repositório de Arquivos, em `personalizacao/parcdest/`.
+4. Subir `config/parcdest.properties` no Repositório de Arquivos, em
+   `personalizacao/parcdest/` — criar a pasta se não existir. Sem ele valem os defaults,
+   e o default de `workaround` é `OFF`.
 5. Começar com `workaround=OFF`. Ligar só depois de confirmar o tracing na base alvo.
 
 Log em `<SW Repository>/personalizacao/parcdest/logAAAA-MM-DD-PARCDEST-TRACE.txt`.
