@@ -325,8 +325,9 @@ Nada aqui foi deduzido. A sequência de testes, em ordem:
 | 16 | `TGFPAR` consultada | O CNPJ da observação **é** o parceiro destinatário. `CGC_CPF` sem máscara; destinatário com `FORNECEDOR='S'` e `TRANSPORTADORA='N'`. |
 | 17 | XML com `xPed` **e** `nItemPed` no item | O Portal passa a **vincular o pedido sozinho** — aba Pedidos com `Vinculado 8.002,64 / Não vinculado 0,0000`, sem clicar em nada. `nItemPed` é a âncora que faltava, porque a `TGFVAR` é item × item. |
 | 18 | **O mesmo XML com `workaround=OFF`** | Nota nasce `CODPARCDEST=0` e **permanece 0** no ciclo inteiro. O Portal vincula o pedido e ainda assim não propaga o destinatário. |
+| 19 | XML com grupo `<entrega>`, pedido do `xPed` inexistente | Origem 3 resolve pelo CNPJ do recebedor. E como o pedido estava **não pendente**, as origens 4 e 5 nem podiam agir — o filtro `PENDENTE='S'` foi exercitado por acidente e segurou. |
 
-Três origens homologadas em base real:
+Cinco caminhos homologados em base real:
 
 ```
 nota 100   workaround=RESOLVIDO origem=XPED xPeds=[1] CODPARCDEST=8
@@ -335,9 +336,12 @@ nota 102   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
 nota 103   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
            workaround=entrega motivo=XML_SEM_ENTREGA
            workaround=RESOLVIDO origem=INFCPL_PEDIDO CODPARCDEST=8 pendentes=1
+nota 104   workaround=RESOLVIDO origem=XPED xPeds=[1] CODPARCDEST=8      (xPed do item, grupo I05)
+nota 107   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
+           workaround=RESOLVIDO origem=ENTREGA doc=**********0173 CODPARCDEST=8
 ```
 
-Nos três, zero `UPDATE` de `CODPARCDEST` em toda a transação e zero `ORA-20101`. Os pares
+Em todos, zero `UPDATE` de `CODPARCDEST` em toda a transação e zero `ORA-20101`. Os pares
 `BEFORE/AFTER_UPDATE` seguintes já nascem com o valor certo.
 
 E o contraexemplo que fecha o diagnóstico — mesmo documento, `workaround=OFF`:
@@ -484,16 +488,16 @@ Roteiro detalhado é documento interno. Em resumo:
 1. **Ambiguidade real.** Dois pedidos pendentes do mesmo fornecedor com destinatários
    diferentes. É onde a origem 4 desempata o que o fallback recusaria, e o único cenário
    com risco de gravar o parceiro errado. Ainda não exercitado.
-2. **Origem 3.** Grupo `<entrega>` — escrita, coberta por teste unitário, sem documento real
-   que a acione até agora.
+2. **Origem 1.** `TGFIXN.CODPARCDEST` preenchido pelo usuário na tela do Portal — única
+   origem ainda não exercitada.
 3. **Exercitar os caminhos de não-atuação.**
 4. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
 5. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
    formato de `TIPMOV`/`PENDENTE`.
 6. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
 
-Já fechados: kill switch em runtime sem restart (nota 105) e origem 2 pelo grupo I05
-(nota 104).
+Já fechados: origens 2 (notas 100 e 104), 3 (107), 4 (103) e 5 (102), e o kill switch em
+runtime sem restart (105).
 
 ---
 
@@ -512,6 +516,7 @@ Já fechados: kill switch em runtime sem restart (nota 105) e origem 2 pelo grup
 | 21/08/2026 | Origem `INFCPL_PEDIDO` adicionada e homologada, com filtro `FORNECEDOR='S'` / `TRANSPORTADORA='N'` |
 | 21/08/2026 | `nItemPed` provado como a âncora do vínculo automático do Portal |
 | 21/08/2026 | Provado que nem com vínculo automático o Portal propaga o destinatário; kill switch homologado |
+| 21/08/2026 | Origem `ENTREGA` homologada; filtro `PENDENTE='S'` exercitado com pedido já atendido |
 
 ---
 
