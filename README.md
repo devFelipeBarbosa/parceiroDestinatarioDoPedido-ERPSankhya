@@ -81,7 +81,13 @@ A análise funcional completa é documento interno do projeto e não acompanha e
              │     ├─ 2+ ─────────► NÃO atua + log        (cadastro duplicado, encerra)
              │     └─ 0 / sem grupo <entrega> ──► cai para 4
              │
-             ├─ 4. fallback: SELECT NUNOTA, NUMNOTA, CODPARCDEST FROM TGFCAB
+             ├─ 4. CNPJ no <infAdic><infCpl> — DV validado, sem emit/dest
+             │     ∩ com os CODPARCDEST dos pedidos pendentes do fornecedor
+             │     ├─ 1 na interseção ──► usa
+             │     ├─ 2+ ──────────────► NÃO atua + log (encerra)
+             │     └─ 0 / sem CNPJ / sem pedido ──► cai para 5
+             │
+             ├─ 5. fallback: SELECT NUNOTA, NUMNOTA, CODPARCDEST FROM TGFCAB
              │        WHERE CODPARC = :codparc AND CODEMP = :codemp
              │          AND TIPMOV = 'O' AND PENDENTE = 'S' AND CODPARCDEST > 0
              │        ORDER BY DTNEG, NUNOTA        ← o pendente mais antigo
@@ -122,13 +128,13 @@ src/main/java/br/com/conceito/parcdest/
 ├── repository/
 │   └── PortalXmlRepository.java             As quatro consultas. Somente leitura.
 └── util/
-    ├── XmlNfe.java        Extrai xPed (ZC e I05) e <entrega> do CLOB.
+    ├── XmlNfe.java        Extrai xPed (ZC e I05), <entrega> e CNPJ do <infCpl>.
     ├── Configuracao.java  Feature flag e escopo, relidos do disco a cada 60s.
     └── Log.java           Arquivo no Repositório de Arquivos do Sankhya.
 
 src/test/java/.../util/
 ├── ConfiguracaoTest.java   10 testes
-└── XmlNfeTest.java         10 testes
+└── XmlNfeTest.java         16 testes
 
 config/parcdest.properties      Arquivo de configuração pronto para subir ao Repositório.
 xml/preparar_xml_simulacao.py   Adapta um XML modelo para importar em outra base.
@@ -184,7 +190,7 @@ TGFCAB e `NUMPEDIDO`/`NUMPEDIDO2` ficam vazios em todo o fluxo.
 O que sobra — e basta — é a `CHAVENFE`, presente no VO desde o `BEFORE_INSERT`. Ela endereça
 o registro da `TGFIXN`, gravado ~12 minutos antes da nota existir, com o XML íntegro.
 
-### 3. Quatro origens, e cada uma sabe o quanto vale
+### 3. Cinco origens, e cada uma sabe o quanto vale
 
 O `xPed` é o mesmo campo que o próprio Portal usa para casar o pedido, apenas antecipado —
 enquanto ele resolver, é ele que manda. Só que **o fornecedor não é obrigado a preencher o
@@ -199,7 +205,8 @@ Daí a cadeia:
 | 1 | `TGFIXN.CODPARCDEST` | — | Escolha explícita do usuário na tela do Portal. |
 | 2 | `xPed` do documento **e de cada item** | ZC01 e I05 | Determinística. O emitente diz qual é o pedido. |
 | 3 | `<entrega>` CNPJ/CPF do recebedor | G | Determinística. O emitente diz para quem entregou. |
-| 4 | Pedido pendente do parceiro | — | Inferência. |
+| 4 | CNPJ no `<infCpl>` **∩** destinatário de pedido pendente | Z (texto livre) | Duas fontes independentes concordando. |
+| 5 | Pedido pendente do parceiro | — | Inferência. |
 
 **O `xPed` é lido em dois lugares.** O grupo `<compra>` (ZC01) traz o pedido do documento
 inteiro; o grupo I05 traz `xPed` e `nItemPed` **dentro de cada `<det><prod>`**. Boa parte dos
@@ -213,7 +220,26 @@ documento identifica o parceiro destinatário sem depender de pedido nenhum. E a
 fiscal, não comercial: fornecedor que entrega em terceiro e não preenche o grupo G está
 irregular, o que é uma alavanca de cobrança bem mais firme que pedir `xPed`.
 
-A origem 4 é a única inferência, e por isso é a única governada por flag (`fallback`), a
+**A origem 4 existe porque nem todo emitente usa o grupo G.** Parte deles descreve o
+recebedor em texto livre: *"MERC. ENVIADA PARA (...) CNPJ:32.787.025/0001-73 IE:258977566"*.
+Garimpar texto livre é heurística — mas CNPJ tem dígito verificador, e o cruzamento fecha o
+resto:
+
+1. Extrai sequências de 14 dígitos do `infCpl` (com ou sem máscara).
+2. Valida o DV módulo 11 — número solto, IE e chave de acesso caem fora sozinhos.
+3. Descarta o CNPJ do emitente e o do destinatário, ambos lidos do próprio XML.
+4. Casa contra `TGFPAR` e **intersecta com os destinatários dos Pedidos de Compra pendentes
+   daquele fornecedor**.
+
+Nenhuma das duas pontas decide sozinha. Texto livre pode citar transportadora, matriz,
+filial. Pedido pendente sozinho é o chute que a origem 5 assume. Juntas, uma confirma a
+outra — e resolvem justamente o caso em que a origem 5 não saberia escolher: com dois pedidos
+pendentes para destinos diferentes, o CNPJ do texto diz qual é.
+
+Sem flag própria: a origem só atua quando as duas fontes concordam, e `workaround=OFF` já
+desliga tudo.
+
+A origem 5 é a única inferência pura, e por isso é a única governada por flag (`fallback`), a
 única que registra `pendentes=` e `divergentes=` no log, e a única que pode ser desligada sem
 desligar o componente.
 
@@ -309,7 +335,7 @@ do log.
 |---|---|
 | `TGFCAB` | Cabeçalho da nota (entidade do evento) e do Pedido de Compra (consulta) |
 | `TGFIXN` | Arquivo do Portal de Importação de XML: `CHAVEACESSO`, `XML` (CLOB), `CODPARCDEST` |
-| `TGFPAR` | Parceiro pelo CNPJ/CPF do grupo `<entrega>`: `CGC_CPF`, `ATIVO` |
+| `TGFPAR` | Parceiro pelo CNPJ/CPF do `<entrega>` ou do `<infCpl>`: `CGC_CPF`, `ATIVO` |
 | `TGFTOP` | Origem da condição da trigger: `ATUALESTTERC`, `CODCFO_ENTRADA` |
 | `TGFVAR` | Vínculo nota × pedido. Evidência e reconciliação, nunca fonte no ponto de extensão |
 | `TSIPAR` | `CONCNPJIEIMPXML`, `TOPIMPORTXML` — parâmetros do Portal |
@@ -396,6 +422,9 @@ workaround=xPed     motivo=PEDIDO_NAO_ENCONTRADO xPeds=[...] CODPARC=... CODEMP=
 workaround=xPed     motivo=PEDIDO_SEM_DESTINATARIO xPeds=[...]
 workaround=entrega  motivo=XML_SEM_ENTREGA
 workaround=entrega  motivo=PARCEIRO_NAO_CADASTRADO doc=**********0144
+workaround=infCpl   motivo=SEM_CNPJ_NO_TEXTO
+workaround=infCpl   motivo=SEM_PEDIDO_PARA_CONFIRMAR cnpjs=1
+workaround=infCpl   motivo=CNPJ_SEM_PEDIDO_CORRESPONDENTE cnpjs=2
 ```
 
 Não-atuação do componente — a nota nasce com `0`:
@@ -406,6 +435,7 @@ workaround=SKIP motivo=SEM_PARCEIRO_OU_EMPRESA
 workaround=SKIP motivo=XML_NAO_ENCONTRADO chave=...
 workaround=SKIP motivo=DESTINATARIOS_DIVERGENTES xPeds=[...] candidatos=[...]
 workaround=SKIP motivo=PARCEIROS_DUPLICADOS doc=... candidatos=[...]
+workaround=SKIP motivo=INFCPL_DIVERGENTE candidatos=[...]
 workaround=SKIP motivo=FALLBACK_DESLIGADO
 workaround=SKIP motivo=SEM_PEDIDO_PENDENTE CODPARC=... CODEMP=...
 workaround=SKIP motivo=PENDENTES_DIVERGENTES CODPARC=... pedidos=... modo=UNICO

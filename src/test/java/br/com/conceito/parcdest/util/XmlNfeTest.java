@@ -87,4 +87,57 @@ class XmlNfeTest {
     void cnpjDoRespTecNaoEConfundidoComEntrega() {
         assertNull(XmlNfe.documentoEntrega(XML_REAL), "o CNPJ do responsavel tecnico nao e recebedor");
     }
+
+    /**
+     * infCpl real da nota importada. O emitente descreve o recebedor em texto livre, com
+     * CNPJ e IE, e nao usa o grupo <entrega>. O CNPJ citado e o do parceiro 8 na base.
+     */
+    private static final String XML_INFCPL_REAL =
+        "<emit><CNPJ>11287642000130</CNPJ><xNome>FORNECEDOR</xNome></emit>"
+      + "<dest><CNPJ>99999999000191</CNPJ><xNome>EMPRESA PADRAO</xNome></dest>"
+      + "<infAdic><infCpl>MERC. ENVIADA PARA CARLOS ERIVELTON HENING, RUA DORVAL "
+      + "MARCATTO-DE 652/653 AOFIM, 1285 JARAGUA DO SUL SC CNPJ:32.787.025/0001-73 "
+      + "IE:258977566 PARA QUEM FOI EMITIDA NF 67461 TRIB APROX R 0 FED FONTE: "
+      + "IBPT/FECOMERCIO SC - PEDIDO</infCpl></infAdic>";
+
+    @Test
+    void cnpjDoRecebedorSaiDoTextoLivre() {
+        List<String> cnpjs = XmlNfe.cnpjsDoInfCpl(XML_INFCPL_REAL);
+
+        assertEquals(1, cnpjs.size(), "IE, numero de nota e enderecos nao sao CNPJ");
+        assertEquals("32787025000173", cnpjs.get(0));
+    }
+
+    @Test
+    void emitenteEDestinatarioSaemDoProprioXml() {
+        assertEquals("11287642000130", XmlNfe.cnpjEmitente(XML_INFCPL_REAL));
+        assertEquals("99999999000191", XmlNfe.cnpjDestinatario(XML_INFCPL_REAL));
+    }
+
+    @Test
+    void numeroDeQuatorzeDigitosComDvErradoNaoPassa() {
+        String xml = "<infAdic><infCpl>CNPJ 32787025000174 e 11111111111111</infCpl></infAdic>";
+
+        assertTrue(XmlNfe.cnpjsDoInfCpl(xml).isEmpty(), "DV invalido nao e CNPJ");
+    }
+
+    @Test
+    void chaveDeAcessoNoTextoNaoViraCnpj() {
+        String xml = "<infAdic><infCpl>REF NFE 42260511287642000130550020000674601531607608"
+                   + "</infCpl></infAdic>";
+
+        assertTrue(XmlNfe.cnpjsDoInfCpl(xml).isEmpty(), "44 digitos nao sao 14");
+    }
+
+    @Test
+    void semInfCplNaoHaCandidato() {
+        assertTrue(XmlNfe.cnpjsDoInfCpl(XML_REAL).isEmpty());
+        assertTrue(XmlNfe.cnpjsDoInfCpl(null).isEmpty());
+    }
+
+    @Test
+    void dvDosParceirosDaBaseConfere() {
+        assertTrue(XmlNfe.dvValido("11287642000130"), "APIUNA FIOS");
+        assertTrue(XmlNfe.dvValido("32787025000173"), "HENING TECELAGEM");
+    }
 }

@@ -24,11 +24,13 @@ import java.util.Set;
  * 1. TGFIXN.CODPARCDEST        escolha explicita do usuario na tela do Portal
  * 2. xPed (grupos ZC e I05)    pedido declarado pelo emitente -> CODPARCDEST do pedido
  * 3. &lt;entrega&gt; CNPJ/CPF        recebedor declarado no documento -> TGFPAR
- * 4. fallback                  pedido pendente do parceiro, conforme flag
+ * 4. CNPJ no &lt;infCpl&gt;          recebedor em texto livre, confirmado contra pedido pendente
+ * 5. fallback                  pedido pendente do parceiro, conforme flag
  * </pre>
  *
  * As origens 2 e 3 sao deterministicas: quem declarou foi o emitente, no proprio documento
- * fiscal. A 4 e inferencia declarada e pode ser desligada sem desligar o componente.
+ * fiscal. A 4 depende de duas fontes concordarem. A 5 e inferencia declarada e pode ser
+ * desligada sem desligar o componente.
  */
 public final class ResolvedorParceiroDestinatario {
 
@@ -74,8 +76,74 @@ public final class ResolvedorParceiroDestinatario {
             return porEntrega.destinatario;
         }
 
-        // 4. Inferencia.
-        return porPedidoPendente(jdbc, codParc, codEmp);
+        // A partir daqui as duas origens restantes olham os pedidos pendentes. Uma consulta so.
+        List<PedidoCandidato> pendentes = PortalXmlRepository.pedidosPendentes(jdbc, codParc, codEmp);
+
+        // 4. Recebedor citado em texto livre, confirmado pelo pedido.
+        Resultado porTexto = porInfCpl(jdbc, arquivo.xml, pendentes);
+        if (porTexto.decidiu()) {
+            return porTexto.destinatario;
+        }
+
+        // 5. Inferencia.
+        return porPedidoPendente(pendentes, codParc, codEmp);
+    }
+
+    /**
+     * CNPJ citado nas Informacoes Complementares, cruzado com os Pedidos de Compra pendentes.
+     *
+     * Nenhuma das duas fontes decide sozinha. O texto livre e texto livre: o emitente pode
+     * citar transportadora, matriz, filial. O pedido pendente sozinho e o chute que o
+     * fallback assume. Juntas, uma confirma a outra — e e justamente o caso em que o
+     * fallback nao saberia escolher: com dois pedidos pendentes para destinos diferentes,
+     * o CNPJ do texto diz qual deles.
+     */
+    private static Resultado porInfCpl(JdbcWrapper jdbc, String xml,
+                                       List<PedidoCandidato> pendentes) throws Exception {
+        List<String> cnpjs = XmlNfe.cnpjsDoInfCpl(xml);
+        if (cnpjs.isEmpty()) {
+            Log.info("workaround=infCpl motivo=SEM_CNPJ_NO_TEXTO");
+            return Resultado.SEGUIR;
+        }
+        if (pendentes.isEmpty()) {
+            // Sem pedido nao ha o que confirmar, e CNPJ em texto livre nao decide sozinho.
+            Log.info("workaround=infCpl motivo=SEM_PEDIDO_PARA_CONFIRMAR cnpjs=" + cnpjs.size());
+            return Resultado.SEGUIR;
+        }
+
+        String cnpjEmitente = XmlNfe.cnpjEmitente(xml);
+        String cnpjDestinatario = XmlNfe.cnpjDestinatario(xml);
+
+        Set<BigDecimal> destinatariosDePedido = new HashSet<BigDecimal>();
+        for (PedidoCandidato pedido : pendentes) {
+            destinatariosDePedido.add(pedido.codParcDest.stripTrailingZeros());
+        }
+
+        Set<BigDecimal> confirmados = new HashSet<BigDecimal>();
+        for (String cnpj : cnpjs) {
+            if (cnpj.equals(cnpjEmitente) || cnpj.equals(cnpjDestinatario)) {
+                continue;
+            }
+            for (BigDecimal parceiro : PortalXmlRepository.parceirosPorDocumento(jdbc, cnpj)) {
+                if (destinatariosDePedido.contains(parceiro.stripTrailingZeros())) {
+                    confirmados.add(parceiro);
+                }
+            }
+        }
+
+        if (confirmados.isEmpty()) {
+            Log.info("workaround=infCpl motivo=CNPJ_SEM_PEDIDO_CORRESPONDENTE cnpjs=" + cnpjs.size());
+            return Resultado.SEGUIR;
+        }
+        if (confirmados.size() > 1) {
+            Log.info("workaround=SKIP motivo=INFCPL_DIVERGENTE candidatos=" + confirmados);
+            return Resultado.PARAR;
+        }
+
+        BigDecimal destinatario = confirmados.iterator().next();
+        Log.info("workaround=RESOLVIDO origem=INFCPL_PEDIDO CODPARCDEST=" + destinatario
+               + " pendentes=" + pendentes.size());
+        return Resultado.de(destinatario);
     }
 
     /**
@@ -172,15 +240,14 @@ public final class ResolvedorParceiroDestinatario {
      * ponytail: casa por parceiro e empresa, nao por produto nem por quantidade. Casar item
      * a item exigiria confrontar todo o &lt;det&gt; com a TGFITE do pedido.
      */
-    private static BigDecimal porPedidoPendente(JdbcWrapper jdbc, BigDecimal codParc,
-                                                BigDecimal codEmp) throws Exception {
+    private static BigDecimal porPedidoPendente(List<PedidoCandidato> pedidos, BigDecimal codParc,
+                                                BigDecimal codEmp) {
         Fallback modo = Configuracao.atual().fallback();
         if (modo == Fallback.OFF) {
             Log.info("workaround=SKIP motivo=FALLBACK_DESLIGADO");
             return null;
         }
 
-        List<PedidoCandidato> pedidos = PortalXmlRepository.pedidosPendentes(jdbc, codParc, codEmp);
         if (pedidos.isEmpty()) {
             Log.info("workaround=SKIP motivo=SEM_PEDIDO_PENDENTE CODPARC=" + codParc
                    + " CODEMP=" + codEmp);
