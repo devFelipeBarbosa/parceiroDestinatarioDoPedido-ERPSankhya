@@ -1,0 +1,42 @@
+plugins {
+    id 'java'
+}
+
+group = 'br.com.conceito.parcdest'
+version = '1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(8)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly files('libs/SankhyaW-extensions.jar')
+    compileOnly files('libs/mge-modelcore-4.35b491.jar')
+    // jape do deploy do servidor. Compilar contra 4.35 de proposito: o cliente roda
+    // 4.35b809 e a base de simulacao 4.36b134. Comparado com javap, a API 4.36 so
+    // acrescenta metodos — 4.35 e subconjunto, entao o JAR roda nas duas.
+    // libs/referencia/jape-4.36b134.jar fica fora do classpath, so para conferencia.
+    compileOnly files('libs/jape-4.35.jar')
+
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+jar {
+    archiveBaseName.set('ParceiroDestinatarioPortalXML')
+}
