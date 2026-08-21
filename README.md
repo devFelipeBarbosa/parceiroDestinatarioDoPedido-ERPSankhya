@@ -327,6 +327,7 @@ Nada aqui foi deduzido. A sequência de testes, em ordem:
 | 18 | **O mesmo XML com `workaround=OFF`** | Nota nasce `CODPARCDEST=0` e **permanece 0** no ciclo inteiro. O Portal vincula o pedido e ainda assim não propaga o destinatário. |
 | 19 | XML com grupo `<entrega>`, pedido do `xPed` inexistente | Origem 3 resolve pelo CNPJ do recebedor. E como o pedido estava **não pendente**, as origens 4 e 5 nem podiam agir — o filtro `PENDENTE='S'` foi exercitado por acidente e segurou. |
 | 20 | `TGFIXN.CODPARCDEST` gravado entre importar e processar | Origem 1 atua e **encerra a cadeia numa linha só**. Provou a precedência: o XML tinha `xPed` no item e nem foi lido. |
+| 21 | **Dois pedidos pendentes, destinatários diferentes** | Três rodadas no mesmo cenário: com CNPJ no documento acerta contra a ordem cronológica; sem CNPJ e em `UNICO` recusa; sem CNPJ e em `ANTIGO` **grava o parceiro errado**. Justificou o default por evidência. |
 
 Cinco caminhos homologados em base real:
 
@@ -353,6 +354,30 @@ workaround=SKIP     motivo=SEM_PEDIDO_PENDENTE CODPARC=7 CODEMP=1
 ```
 
 Nota nasce com `0`, sem erro, sem `ORA-20101`. 8 ms.
+
+### O cenário de ambiguidade
+
+Dois Pedidos de Compra pendentes do mesmo fornecedor, com destinatários diferentes, e a data
+escolhida para que o **mais antigo aponte para o parceiro errado**:
+
+```
+NUNOTA 111   DTNEG 15/08/2026   PENDENTE S   CODPARCDEST 6   <- mais antigo, ERRADO
+NUNOTA  96   DTNEG 20/08/2026   PENDENTE S   CODPARCDEST 8   <- CERTO
+```
+
+O CNPJ do parceiro 8 aparece na observação do XML. O do 6 não aparece em lugar nenhum. Acertar
+o 8 só é possível lendo o documento; a ordem cronológica leva ao 6.
+
+| Rodada | Documento | `fallback` | Log | Correto? |
+|---|---|---|---|---|
+| 1 (nota 112) | com CNPJ | `UNICO` | `origem=INFCPL_PEDIDO CODPARCDEST=8 pendentes=2` | sim |
+| 2 (nota 113) | sem CNPJ | `UNICO` | `SKIP PENDENTES_DIVERGENTES pedidos=2` | recusa correta |
+| 3 (nota 114) | sem CNPJ | `ANTIGO` | `origem=PEDIDO_MAIS_ANTIGO CODPARCDEST=6 divergentes=S` | **não** |
+
+Mesmo cenário de base nas três; muda só o que o documento carrega e o quanto o componente está
+autorizado a inferir. **`UNICO` é o default por evidência, não por preferência:** é a única
+configuração que nunca gravou destinatário errado. `ANTIGO` continua disponível, e o log
+declara `divergentes=S` toda vez que o risco é assumido.
 
 Em todos, zero `UPDATE` de `CODPARCDEST` em toda a transação e zero `ORA-20101`. Os pares
 `BEFORE/AFTER_UPDATE` seguintes já nascem com o valor certo.
@@ -498,17 +523,14 @@ registro.
 
 Roteiro detalhado é documento interno. Em resumo:
 
-1. **Ambiguidade real.** Dois pedidos pendentes do mesmo fornecedor com destinatários
-   diferentes. É onde a origem 4 desempata o que o fallback recusaria, e o único cenário
-   com risco de gravar o parceiro errado. Ainda não exercitado.
-2. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
-3. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
+1. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
+2. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
    formato de `TIPMOV`/`PENDENTE`.
-4. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
+3. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
 
-**Todas as cinco origens já foram exercitadas em base real** — notas 110, 100, 104, 107, 103
-e 102 — junto com o caminho de não-atuação completo (108, 109) e o kill switch em runtime sem
-restart (105).
+**Toda a cadeia já foi exercitada em base real** — as cinco origens (notas 110, 100, 104, 107,
+103, 102), o caminho de não-atuação completo (108, 109), o cenário de ambiguidade nas três
+configurações (112, 113, 114) e o kill switch em runtime sem restart (105).
 
 ---
 
@@ -529,6 +551,7 @@ restart (105).
 | 21/08/2026 | Provado que nem com vínculo automático o Portal propaga o destinatário; kill switch homologado |
 | 21/08/2026 | Origem `ENTREGA` homologada; filtro `PENDENTE='S'` exercitado com pedido já atendido |
 | 21/08/2026 | Origem `PORTAL_TGFIXN` homologada; cadeia completa exercitada em base real |
+| 21/08/2026 | Cenário de ambiguidade nas três configurações; default `UNICO` justificado por evidência |
 
 ---
 
