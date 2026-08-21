@@ -32,7 +32,7 @@ import java.util.Set;
  * fiscal. A 4 depende de duas fontes concordarem. A 5 e inferencia declarada e pode ser
  * desligada sem desligar o componente.
  */
-public final class ResolvedorParceiroDestinatario {
+public final class exiResolvedorParceiroDestinatario {
 
     private ResolvedorParceiroDestinatario() {}
 

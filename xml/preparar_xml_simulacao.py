@@ -38,6 +38,35 @@ def troca_tag(trecho, tag, valor):
     return novo
 
 
+def xped_de_item(xml, xped, item):
+    """Insere <xPed>/<nItemPed> em cada <prod>, na posicao do schema."""
+    def um(m):
+        prod = m.group(0)
+        tags = '<xPed>%s</xPed><nItemPed>%s</nItemPed>' % (xped, item)
+        if '<rastro>' in prod:
+            return prod.replace('<rastro>', tags + '<rastro>', 1)
+        return prod.replace('</indTot>', '</indTot>' + tags, 1)
+    novo, n = re.subn(r'<prod>.*?</prod>', um, xml, flags=re.S)
+    if not n:
+        sys.exit('nenhum <prod> encontrado')
+    print('xPed de item aplicado em %d item(ns)' % n)
+    return novo
+
+
+def bloco_entrega(dest, cnpj):
+    """Monta o grupo <entrega> reaproveitando o endereco do <dest>."""
+    def campo(tag):
+        m = re.search(r'<%s>(.*?)</%s>' % (tag, tag), dest, re.S)
+        return m.group(1) if m else None
+
+    partes = ['<CNPJ>%s</CNPJ>' % re.sub(r'[^0-9]', '', cnpj)]
+    for tag in ('xNome', 'xLgr', 'nro', 'xBairro', 'cMun', 'xMun', 'UF', 'CEP'):
+        valor = campo(tag)
+        if valor:
+            partes.append('<%s>%s</%s>' % (tag, valor, tag))
+    return '<entrega>' + ''.join(partes) + '</entrega>'
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('entrada', nargs='?')
@@ -48,6 +77,12 @@ def main():
     p.add_argument('--nova-chave', action='store_true',
                    help='gera cNF/nNF novos e recalcula DV, Id e chNFe')
     p.add_argument('--nnf', help='numero da NF (usado com --nova-chave)')
+    p.add_argument('--sem-compra', action='store_true',
+                   help='remove o grupo <compra> (testa XML_SEM_XPED)')
+    p.add_argument('--sem-infcpl', action='store_true',
+                   help='apaga o texto de <infCpl> (testa SEM_CNPJ_NO_TEXTO)')
+    p.add_argument('--xped-item', help='poe <xPed>/<nItemPed> em cada <det><prod> (grupo I05)')
+    p.add_argument('--entrega-cnpj', help='cria o grupo <entrega> com esse CNPJ (grupo G)')
     p.add_argument('--autoteste', action='store_true')
     a = p.parse_args()
 
@@ -55,6 +90,14 @@ def main():
         # chave real do XML modelo: os 43 primeiros digitos tem que gerar o DV 8
         assert dv_chave('4226051128764200013055002000067460153160760') == '8'
         assert troca_tag('<xPed>1</xPed>', 'xPed', '77') == '<xPed>77</xPed>'
+        # xPed de item entra depois de indTot e antes de rastro (ordem do schema)
+        prod = '<det><prod><indTot>1</indTot><rastro><nLote>A</nLote></rastro></prod></det>'
+        assert xped_de_item(prod, '9', '1') == (
+            '<det><prod><indTot>1</indTot><xPed>9</xPed><nItemPed>1</nItemPed>'
+            '<rastro><nLote>A</nLote></rastro></prod></det>')
+        # sem rastro, entra logo apos indTot
+        assert xped_de_item('<prod><indTot>1</indTot></prod>', '9', '1') == (
+            '<prod><indTot>1</indTot><xPed>9</xPed><nItemPed>1</nItemPed></prod>')
         print('autoteste ok')
         return
 
@@ -72,6 +115,23 @@ def main():
         if valor:
             novo_dest = troca_tag(novo_dest, tag, valor)
     xml = xml[:dest.start()] + novo_dest + xml[dest.end():]
+
+    if a.entrega_cnpj:
+        # Grupo G vem logo depois de </dest>, conforme a ordem do layout.
+        xml = xml.replace('</dest>', '</dest>' + bloco_entrega(novo_dest, a.entrega_cnpj), 1)
+        print('grupo <entrega> criado')
+
+    if a.sem_compra:
+        xml, n = re.subn(r'<compra>.*?</compra>', '', xml, count=1, flags=re.S)
+        print('grupo <compra> removido' if n else 'nao havia grupo <compra>')
+
+    if a.sem_infcpl:
+        xml, n = re.subn(r'<infCpl>.*?</infCpl>', '<infCpl>SEM COMPLEMENTO</infCpl>',
+                         xml, count=1, flags=re.S)
+        print('infCpl esvaziado' if n else 'nao havia <infCpl>')
+
+    if a.xped_item:
+        xml = xped_de_item(xml, a.xped_item, '1')
 
     if a.xped:
         compra = re.search(r'<compra>.*?</compra>', xml, re.S)
