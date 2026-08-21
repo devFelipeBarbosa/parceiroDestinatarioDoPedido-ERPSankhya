@@ -328,6 +328,8 @@ Nada aqui foi deduzido. A sequência de testes, em ordem:
 | 19 | XML com grupo `<entrega>`, pedido do `xPed` inexistente | Origem 3 resolve pelo CNPJ do recebedor. E como o pedido estava **não pendente**, as origens 4 e 5 nem podiam agir — o filtro `PENDENTE='S'` foi exercitado por acidente e segurou. |
 | 20 | `TGFIXN.CODPARCDEST` gravado entre importar e processar | Origem 1 atua e **encerra a cadeia numa linha só**. Provou a precedência: o XML tinha `xPed` no item e nem foi lido. |
 | 21 | **Dois pedidos pendentes, destinatários diferentes** | Três rodadas no mesmo cenário: com CNPJ no documento acerta contra a ordem cronológica; sem CNPJ e em `UNICO` recusa; sem CNPJ e em `ANTIGO` **grava o parceiro errado**. Justificou o default por evidência. |
+| 22 | **Nota confirmada** | Estoque de terceiros no parceiro certo, financeiro no fornecedor, fiscal batendo com o XML. |
+| 23 | Alteração manual do campo **na nota já confirmada** | `ORA-20101`. A trava standard continua valendo sobre uma nota que o componente preencheu. |
 
 Cinco caminhos homologados em base real:
 
@@ -399,6 +401,22 @@ campo continua `0`. É a reprodução mais limpa do defeito, e a que serve de an
 Custo `BEFORE_INSERT` → `AFTER_INSERT`: **~50 ms**, estável independente de quantas origens a
 cadeia percorre. A primeira medição de 330 ms era o custo de aquecimento da primeira
 importação após subir o JAR.
+
+### Integridade da nota confirmada
+
+A nota 115 foi a primeira do projeto a ser confirmada. Quatro conferências:
+
+| Conferência | Resultado |
+|---|---|
+| Estoque de terceiros | `TGFEST` e Kardex com 8.002,640 em poder do **parceiro 8** |
+| Financeiro | `TGFFIN` com a parcela de 113.637,49 no **fornecedor 7** |
+| Fiscal | cabeçalho, item, base de ICMS e NCM batendo com o XML |
+| **Trava standard** | alteração manual depois de confirmada → **`ORA-20101`** |
+
+A última é a que mais importa. O componente **não afrouxou a validação**: uma nota preenchida
+por ele continua tão protegida quanto qualquer outra. O log registra a tentativa com a mesma
+assinatura de rollback do início da investigação — `BEFORE_UPDATE` com `OLD.CODPARCDEST=8
+NEW.CODPARCDEST=6` e nenhum `AFTER_UPDATE`.
 
 ---
 
@@ -523,14 +541,14 @@ registro.
 
 Roteiro detalhado é documento interno. Em resumo:
 
-1. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
-2. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
+1. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
    formato de `TIPMOV`/`PENDENTE`.
-3. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
+2. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
 
-**Toda a cadeia já foi exercitada em base real** — as cinco origens (notas 110, 100, 104, 107,
-103, 102), o caminho de não-atuação completo (108, 109), o cenário de ambiguidade nas três
-configurações (112, 113, 114) e o kill switch em runtime sem restart (105).
+**Os testes em simulação estão encerrados.** Foram exercitadas as cinco origens (notas 110,
+100, 104, 107, 103, 102), o caminho de não-atuação completo (108, 109), o cenário de
+ambiguidade nas três configurações (112, 113, 114), o kill switch em runtime sem restart (105)
+e a integridade da nota confirmada (115).
 
 ---
 
@@ -552,6 +570,7 @@ configurações (112, 113, 114) e o kill switch em runtime sem restart (105).
 | 21/08/2026 | Origem `ENTREGA` homologada; filtro `PENDENTE='S'` exercitado com pedido já atendido |
 | 21/08/2026 | Origem `PORTAL_TGFIXN` homologada; cadeia completa exercitada em base real |
 | 21/08/2026 | Cenário de ambiguidade nas três configurações; default `UNICO` justificado por evidência |
+| 21/08/2026 | Integridade da nota confirmada: estoque, financeiro, fiscal e trava standard |
 
 ---
 
