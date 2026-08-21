@@ -60,18 +60,29 @@ A análise funcional completa é documento interno do projeto e não acompanha e
        └── workaround=ON
              │
              ├─ CHAVENFE do VO                       (comprovado presente)
-             ├─ SELECT XML FROM TGFIXN
+             ├─ SELECT XML, CODPARCDEST FROM TGFIXN
              │      WHERE CHAVEACESSO = :chave
-             ├─ extrai <compra><xPed>                 (indexOf, sem parser)
-             ├─ SELECT DISTINCT CODPARCDEST FROM TGFCAB
-             │      WHERE NUMNOTA = :xPed
-             │        AND CODPARC = :codparc AND CODEMP = :codemp
-             │        AND TIPMOV = 'O' AND PENDENTE = 'S'
              │
-             ├─ 1 valor > 0 ──► vo.setProperty("CODPARCDEST", valor)
-             ├─ 0 linhas ─────► não atua + log
-             ├─ 2+ valores ───► não atua + log   (divergência)
-             └─ valor = 0 ────► não atua + log
+             ├─ 1. TGFIXN.CODPARCDEST > 0 ────► usa    (escolha do usuário na tela)
+             │
+             ├─ 2. extrai <compra><xPed>              (indexOf, sem parser)
+             │     SELECT DISTINCT CODPARCDEST FROM TGFCAB
+             │        WHERE NUMNOTA = :xPed
+             │          AND CODPARC = :codparc AND CODEMP = :codemp
+             │          AND TIPMOV = 'O' AND PENDENTE = 'S'
+             │     ├─ 1 valor > 0 ──► usa
+             │     ├─ 2+ valores ───► NÃO atua + log     (divergência declarada)
+             │     └─ 0 linhas / sem xPed / valor 0 ──► cai para 3
+             │
+             ├─ 3. fallback: SELECT NUNOTA, NUMNOTA, CODPARCDEST FROM TGFCAB
+             │        WHERE CODPARC = :codparc AND CODEMP = :codemp
+             │          AND TIPMOV = 'O' AND PENDENTE = 'S' AND CODPARCDEST > 0
+             │        ORDER BY DTNEG, NUNOTA        ← o pendente mais antigo
+             │     ├─ ANTIGO ─► usa a 1ª linha       (regra do próprio Portal)
+             │     ├─ UNICO ──► usa só se todos convergirem
+             │     └─ OFF ────► não atua + log
+             │
+             └─ vo.setProperty("CODPARCDEST", valor)
        │
        ▼
 [Nota nasce com o destinatário correto]
@@ -102,14 +113,14 @@ src/main/java/br/com/conceito/parcdest/
 ├── service/
 │   └── ResolvedorParceiroDestinatario.java   Regra de resolução e fail-safe.
 ├── repository/
-│   └── PortalXmlRepository.java             As duas consultas. Somente leitura.
+│   └── PortalXmlRepository.java             As três consultas. Somente leitura.
 └── util/
     ├── XmlNfe.java        Extração do <xPed> do CLOB.
     ├── Configuracao.java  Feature flag e escopo, relidos do disco a cada 60s.
     └── Log.java           Arquivo no Repositório de Arquivos do Sankhya.
 
 src/test/java/.../util/
-├── ConfiguracaoTest.java   7 testes
+├── ConfiguracaoTest.java   9 testes
 └── XmlNfeTest.java         4 testes
 
 xml/preparar_xml_simulacao.py   Adapta um XML modelo para importar em outra base.
@@ -129,8 +140,15 @@ Ausente = default seguro.
 tracing=ON            # registra eventos da TGFCAB no log
 workaround=OFF        # FASE 2. Preenche CODPARCDEST no beforeInsert.
 tops=1419             # TOPs no escopo, separadas por vírgula
+fallback=ANTIGO       # quando o xPed não resolve: ANTIGO | UNICO | OFF
 camposExtras=         # campos extras da TGFCAB a registrar no log
 ```
+
+| `fallback` | Comportamento quando o `xPed` não resolve o pedido |
+|---|---|
+| `ANTIGO` (default) | Usa o pedido pendente mais antigo do parceiro. É a mesma regra do botão **Ligar pedidos mais antigos** do Portal. |
+| `UNICO` | Só atua se todos os pedidos pendentes do parceiro apontarem para o mesmo destinatário. Recusa a ambiguidade. |
+| `OFF` | Só atua por `TGFIXN.CODPARCDEST` ou `xPed`. Nenhuma inferência. |
 
 Arquivo, e não parâmetro de sistema, por decisão de arquitetura: desligar não
 exige alteração de banco, de objeto standard, nem recompilação.
@@ -154,10 +172,29 @@ TGFCAB e `NUMPEDIDO`/`NUMPEDIDO2` ficam vazios em todo o fluxo.
 O que sobra — e basta — é a `CHAVENFE`, presente no VO desde o `BEFORE_INSERT`. Ela endereça
 o registro da `TGFIXN`, gravado ~12 minutos antes da nota existir, com o XML íntegro.
 
-### 3. `xPed` não é heurística
+### 3. Três origens, e cada uma sabe o quanto vale
 
-É o mesmo campo que o próprio Portal usa para casar o pedido, apenas antecipado. A arquitetura do componente proíbe heurística (pedido mais recente, mesmo produto, mesma quantidade);
-nada disso é usado.
+O `xPed` é o mesmo campo que o próprio Portal usa para casar o pedido, apenas antecipado —
+enquanto ele resolver, é ele que manda. Só que **o fornecedor não é obrigado a preencher o
+`xPed`**, e quando não preenche o campo chega vazio ou com um número que não existe na base.
+Foi o caso do teste com `xPed=4`: `motivo=PEDIDO_NAO_ENCONTRADO`, nota nascida com `0`, e o
+`ORA-20101` de volta na correção manual.
+
+Daí a cadeia:
+
+| # | Origem | Natureza |
+|---|---|---|
+| 1 | `TGFIXN.CODPARCDEST` | Escolha explícita do usuário na tela do Portal. Não é inferência. |
+| 2 | `<compra><xPed>` | Determinística. O documento diz qual é o pedido. |
+| 3 | Pedido pendente mais antigo do parceiro | Inferência — a mesma que o Portal aplica em **Ligar pedidos mais antigos**. |
+
+A origem 3 é declaradamente inferência, e por isso é a única governada por flag
+(`fallback`), a única que registra `pendentes=` e `divergentes=` no log, e a única que pode
+ser desligada sem desligar o componente.
+
+**Divergência no `xPed` não cai para o fallback.** Se o número do pedido casa dois pedidos
+com destinatários diferentes, o documento está ambíguo; trocar isso por "então pega o mais
+antigo" seria transformar recusa em chute. Nesse caminho o componente não atua.
 
 ### 4. `TIPMOV='O'` e `PENDENTE='S'` — a mesma regra do Portal
 
@@ -177,8 +214,8 @@ destinatário e outro zerado, gravaria o preenchido com falsa confiança. Fora d
 ### 6. Conexão: `PersistenceEvent.getJdbcWrapper()`
 
 O próprio evento entrega o `JdbcWrapper` da transação corrente. Não abre `JapeSession`, não
-usa `EntityFacadeFactory`, não cria conexão nova. As duas consultas rodam na mesma conexão
-que está criando a nota, e nenhuma das duas tabelas é escrita pela transação antes do
+usa `EntityFacadeFactory`, não cria conexão nova. As consultas rodam na mesma conexão
+que está criando a nota, e nenhuma das tabelas lidas é escrita pela transação antes do
 `INSERT` do cabeçalho.
 
 ### 7. Sem parser de XML
@@ -298,7 +335,7 @@ Log em `<SW Repository>/personalizacao/parcdest/logAAAA-MM-DD-PARCDEST-TRACE.txt
 2. `workaround=ON`, esperar 60s, apagar a nota, importar de novo.
    Esperado no log:
    ```
-   workaround=RESOLVIDO xPed=<n> CODPARCDEST=<n>
+   workaround=RESOLVIDO origem=XPED xPed=<n> CODPARCDEST=<n>
    workaround=APLICADO  NUNOTA=<n> ...
    AFTER_INSERT ... CODPARCDEST=<n>
    ```
@@ -306,16 +343,39 @@ Log em `<SW Repository>/personalizacao/parcdest/logAAAA-MM-DD-PARCDEST-TRACE.txt
 4. Confirmar que o log não tem nenhuma linha `OLD.CODPARCDEST` para a nota nova — se tiver,
    alguém tentou um `UPDATE` e o desenho falhou.
 
-Toda não-atuação registra o motivo:
+5. Repetir com o `xPed` apontando para um pedido inexistente. Esperado: o `xPed` desiste, o
+   fallback assume, e a nota nasce preenchida do mesmo jeito:
+   ```
+   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPed=4 CODPARC=7 CODEMP=1
+   workaround=RESOLVIDO origem=PEDIDO_MAIS_ANTIGO NUNOTA=96 NUMNOTA=96 CODPARCDEST=8 pendentes=1 divergentes=N
+   ```
+
+O log distingue o que é desistência de etapa do que é não-atuação do componente:
+
+```
+workaround=xPed  motivo=...     ← a etapa 2 desistiu, o fallback ainda vai rodar
+workaround=SKIP  motivo=...     ← o componente não atua, a nota nasce com 0
+```
+
+Desistências da etapa `xPed`:
+
+```
+workaround=xPed motivo=XML_SEM_XPED
+workaround=xPed motivo=XPED_NAO_NUMERICO xPed=...
+workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPed=... CODPARC=... CODEMP=...
+workaround=xPed motivo=PEDIDO_SEM_DESTINATARIO xPed=...
+```
+
+Não-atuação do componente:
 
 ```
 workaround=SKIP motivo=SEM_CHAVENFE
+workaround=SKIP motivo=SEM_PARCEIRO_OU_EMPRESA
 workaround=SKIP motivo=XML_NAO_ENCONTRADO chave=...
-workaround=SKIP motivo=XML_SEM_XPED chave=...
-workaround=SKIP motivo=XPED_NAO_NUMERICO xPed=...
-workaround=SKIP motivo=PEDIDO_NAO_ENCONTRADO xPed=... CODPARC=... CODEMP=...
 workaround=SKIP motivo=DESTINATARIOS_DIVERGENTES xPed=... candidatos=[...]
-workaround=SKIP motivo=PEDIDO_SEM_DESTINATARIO xPed=...
+workaround=SKIP motivo=FALLBACK_DESLIGADO
+workaround=SKIP motivo=SEM_PEDIDO_PENDENTE CODPARC=... CODEMP=...
+workaround=SKIP motivo=PENDENTES_DIVERGENTES CODPARC=... pedidos=... modo=UNICO
 ```
 
 ---

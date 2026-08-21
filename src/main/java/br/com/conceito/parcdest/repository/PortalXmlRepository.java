@@ -12,14 +12,18 @@ import java.util.List;
  * Consultas do workaround. Todas rodam no {@link JdbcWrapper} do proprio evento, ou seja
  * na conexao da transacao que esta criando a nota — nao abre sessao nem conexao propria.
  *
- * Somente leitura. Nenhuma das duas tabelas e escrita pela transacao antes do INSERT do
+ * Somente leitura. Nenhuma das tabelas lidas e escrita pela transacao antes do INSERT do
  * cabecalho (comprovado pelo Monitor de Consultas, secao 14.1 da arquitetura).
  */
 public final class PortalXmlRepository {
 
-    /** Arquivo do Portal de Importacao de XML, endereçado pela chave de acesso. */
-    private static final String SQL_XML =
-        "SELECT XML FROM TGFIXN WHERE CHAVEACESSO = ?";
+    /**
+     * Arquivo do Portal de Importacao de XML, endereçado pela chave de acesso.
+     * CODPARCDEST e a coluna que o Portal expoe na tela e nao preenche sozinho: quando o
+     * usuario digita ali, e escolha explicita e tem prioridade sobre qualquer inferencia.
+     */
+    private static final String SQL_ARQUIVO =
+        "SELECT XML, CODPARCDEST FROM TGFIXN WHERE CHAVEACESSO = ?";
 
     /**
      * Destinatarios distintos dos Pedidos de Compra candidatos.
@@ -32,16 +36,58 @@ public final class PortalXmlRepository {
       + " WHERE NUMNOTA = ? AND CODPARC = ? AND CODEMP = ?"
       + "   AND TIPMOV = 'O' AND PENDENTE = 'S'";
 
+    /**
+     * Pedidos pendentes do parceiro, do mais antigo para o mais novo. Reproduz a ordem de
+     * "Ligar pedidos mais antigos" do proprio Portal (secao 3 da arquitetura).
+     *
+     * CODPARCDEST > 0 ja descarta pedido que nao tem o que propagar.
+     */
+    private static final String SQL_PEDIDOS_PENDENTES =
+        "SELECT NUNOTA, NUMNOTA, CODPARCDEST FROM TGFCAB"
+      + " WHERE CODPARC = ? AND CODEMP = ?"
+      + "   AND TIPMOV = 'O' AND PENDENTE = 'S' AND CODPARCDEST > 0"
+      + " ORDER BY DTNEG, NUNOTA";
+
+    /** ponytail: teto de linhas lidas. Parceiro com mais pedidos pendentes que isso ja e ambiguidade. */
+    private static final int LIMITE_CANDIDATOS = 50;
+
     private PortalXmlRepository() {}
 
-    /** XML importado correspondente a chave, ou null se nao houver registro. */
-    public static String xmlDaChave(JdbcWrapper jdbc, String chaveNfe) throws Exception {
-        PreparedStatement consulta = jdbc.getPreparedStatement(SQL_XML);
+    /** Linha do Portal: o XML importado e o destinatario que o usuario tenha digitado. */
+    public static final class ArquivoImportado {
+        public final String xml;
+        public final BigDecimal codParcDest;
+
+        ArquivoImportado(String xml, BigDecimal codParcDest) {
+            this.xml = xml;
+            this.codParcDest = codParcDest;
+        }
+    }
+
+    /** Pedido de Compra candidato. */
+    public static final class PedidoCandidato {
+        public final BigDecimal nunota;
+        public final BigDecimal numnota;
+        public final BigDecimal codParcDest;
+
+        PedidoCandidato(BigDecimal nunota, BigDecimal numnota, BigDecimal codParcDest) {
+            this.nunota = nunota;
+            this.numnota = numnota;
+            this.codParcDest = codParcDest;
+        }
+    }
+
+    /** Arquivo correspondente a chave, ou null se nao houver registro. */
+    public static ArquivoImportado arquivoDaChave(JdbcWrapper jdbc, String chaveNfe) throws Exception {
+        PreparedStatement consulta = jdbc.getPreparedStatement(SQL_ARQUIVO);
         try {
             consulta.setString(1, chaveNfe);
             ResultSet resultado = consulta.executeQuery();
             try {
-                return resultado.next() ? resultado.getString(1) : null;
+                if (!resultado.next()) {
+                    return null;
+                }
+                return new ArquivoImportado(resultado.getString(1), resultado.getBigDecimal(2));
             } finally {
                 resultado.close();
             }
@@ -51,8 +97,8 @@ public final class PortalXmlRepository {
     }
 
     /**
-     * Valores distintos de CODPARCDEST dos pedidos candidatos. Lista vazia = nenhum pedido;
-     * mais de um elemento = divergencia, e quem chama decide (secoes 15 e 16).
+     * Valores distintos de CODPARCDEST dos pedidos casados pelo xPed. Lista vazia = nenhum
+     * pedido; mais de um elemento = divergencia, e quem chama decide (secoes 15 e 16).
      */
     public static List<BigDecimal> destinatariosDoPedido(JdbcWrapper jdbc, BigDecimal numeroPedido,
                                                          BigDecimal codParc, BigDecimal codEmp) throws Exception {
@@ -67,6 +113,31 @@ public final class PortalXmlRepository {
                 while (resultado.next()) {
                     BigDecimal valor = resultado.getBigDecimal(1);
                     encontrados.add(valor == null ? BigDecimal.ZERO : valor);
+                }
+            } finally {
+                resultado.close();
+            }
+        } finally {
+            consulta.close();
+        }
+        return encontrados;
+    }
+
+    /** Pedidos pendentes do parceiro com destinatario preenchido, do mais antigo em diante. */
+    public static List<PedidoCandidato> pedidosPendentes(JdbcWrapper jdbc, BigDecimal codParc,
+                                                        BigDecimal codEmp) throws Exception {
+        List<PedidoCandidato> encontrados = new ArrayList<PedidoCandidato>(4);
+        PreparedStatement consulta = jdbc.getPreparedStatement(SQL_PEDIDOS_PENDENTES);
+        try {
+            consulta.setBigDecimal(1, codParc);
+            consulta.setBigDecimal(2, codEmp);
+            ResultSet resultado = consulta.executeQuery();
+            try {
+                while (resultado.next() && encontrados.size() < LIMITE_CANDIDATOS) {
+                    encontrados.add(new PedidoCandidato(
+                        resultado.getBigDecimal(1),
+                        resultado.getBigDecimal(2),
+                        resultado.getBigDecimal(3)));
                 }
             } finally {
                 resultado.close();

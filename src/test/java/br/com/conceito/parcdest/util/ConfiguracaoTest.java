@@ -77,4 +77,16 @@ class ConfiguracaoTest {
         assertEquals("NUNOTAORIG", c.camposExtras().get(0));
         assertEquals("STATUSNOTA", c.camposExtras().get(1));
     }
+
+    @Test
+    void fallbackAusenteSegueORegraDoPortal() {
+        assertEquals(Configuracao.Fallback.ANTIGO, Configuracao.parse(new Properties()).fallback());
+    }
+
+    @Test
+    void fallbackAceitaOsTresModos() {
+        assertEquals(Configuracao.Fallback.OFF, Configuracao.parse(props("fallback", "OFF")).fallback());
+        assertEquals(Configuracao.Fallback.UNICO, Configuracao.parse(props("fallback", " unico ")).fallback());
+        assertEquals(Configuracao.Fallback.ANTIGO, Configuracao.parse(props("fallback", "ON")).fallback());
+    }
 }
