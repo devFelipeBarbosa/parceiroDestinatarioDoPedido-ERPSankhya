@@ -319,19 +319,28 @@ Nada aqui foi deduzido. A sequência de testes, em ordem:
 | 10 | Pedido consultado vinculado × desvinculado | `PENDENTE` alterna `S`/`N` com o vínculo. Deu o filtro e a idempotência. |
 | 11 | `javap` comparativo 4.35 × 4.36 | API só cresce. Compilar contra 4.35 é seguro nas duas bases. |
 | 12 | **`workaround=ON`, importação real** | Nota nasce com o destinatário. Nenhum `UPDATE`, nenhum `ORA-20101`. |
+| 13 | `xPed` trocado para número inexistente | `PEDIDO_NAO_ENCONTRADO`, nota com `0`, `ORA-20101` de volta na correção manual. Provou que o `xPed` sozinho não cobre. |
+| 14 | Layout NF-e conferido | `xPed` existe em dois grupos (ZC01 e I05) e o grupo G (`<entrega>`) traz CNPJ obrigatório do recebedor. Duas fontes que não estavam sendo lidas. |
+| 15 | Observação da nota lida na Central | O emitente descreve o recebedor em texto livre, com CNPJ, e **não** usa o grupo G. |
+| 16 | `TGFPAR` consultada | O CNPJ da observação **é** o parceiro destinatário. `CGC_CPF` sem máscara; destinatário com `FORNECEDOR='S'` e `TRANSPORTADORA='N'`. |
 
-Log do teste final (nota 100):
+Três origens homologadas em base real:
 
 ```
-21:16:48.014  BEFORE_INSERT   NUNOTA=100 CODPARCDEST=0 CHAVENFE=4226...7608
-21:16:48.343  workaround=RESOLVIDO xPed=1 CODPARCDEST=8
-21:16:48.344  workaround=APLICADO  NUNOTA=100 NUMNOTA=67460 CODPARCDEST=8
-21:16:48.478  AFTER_INSERT    NUNOTA=100 CODPARCDEST=8
+nota 100   workaround=RESOLVIDO origem=XPED xPeds=[1] CODPARCDEST=8
+nota 102   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
+           workaround=RESOLVIDO origem=PEDIDO_MAIS_ANTIGO NUNOTA=96 CODPARCDEST=8 pendentes=1
+nota 103   workaround=xPed motivo=PEDIDO_NAO_ENCONTRADO xPeds=[4]
+           workaround=entrega motivo=XML_SEM_ENTREGA
+           workaround=RESOLVIDO origem=INFCPL_PEDIDO CODPARCDEST=8 pendentes=1
 ```
 
-Os 8 pares `BEFORE/AFTER_UPDATE` seguintes já mostram `CODPARCDEST=8` e nenhum altera o
-campo. Custo medido: **~330 ms**, cobrindo as duas consultas, a leitura do CLOB e a escrita
-do log.
+Nos três, zero `UPDATE` de `CODPARCDEST` em toda a transação e zero `ORA-20101`. Os pares
+`BEFORE/AFTER_UPDATE` seguintes já nascem com o valor certo.
+
+Custo `BEFORE_INSERT` → `AFTER_INSERT`: **~50 ms**, estável independente de quantas origens a
+cadeia percorre. A primeira medição de 330 ms era o custo de aquecimento da primeira
+importação após subir o JAR.
 
 ---
 
@@ -456,13 +465,17 @@ registro.
 
 Roteiro detalhado é documento interno. Em resumo:
 
-1. **Exercitar os caminhos de não-atuação.** Só o caminho feliz foi testado.
-2. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
+1. **Ambiguidade real.** Dois pedidos pendentes do mesmo fornecedor com destinatários
+   diferentes. É onde a origem 4 desempata o que o fallback recusaria, e o único cenário
+   com risco de gravar o parceiro errado. Ainda não exercitado.
+2. **Origens 2-item e 3.** `xPed` dentro de `<det><prod>` e grupo `<entrega>` — escritas,
+   cobertas por teste unitário, sem documento real que as acione até agora.
+3. **Exercitar os caminhos de não-atuação.**
+4. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
+5. Testar `workaround=OFF` em runtime — o kill switch precisa funcionar sem restart.
+6. **Homologar em 4.35b809**, a versão do cliente, reconfirmando trigger, `TGFIXN` e o
    formato de `TIPMOV`/`PENDENTE`.
-3. Validar estoque de terceiros, fiscal e financeiro na nota resultante.
-4. Testar `workaround=OFF` em runtime — o kill switch precisa funcionar sem restart.
-5. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente
-   .
+7. Quando a Sankhya publicar correção oficial: `workaround=OFF` e remover o componente.
 
 ---
 
@@ -475,7 +488,10 @@ Roteiro detalhado é documento interno. Em resumo:
 | 20/08/2026 | Monitor de Consultas mapeou a ordem real dos comandos do Portal |
 | 20/08/2026 | Estrutura de pacotes reorganizada no modelo `event/service/repository/util` |
 | 20/08/2026 | `stubs/` removido, substituído pelo `jape-4.35.jar` real do servidor |
-| 20/08/2026 | Fase 2 implementada e homologada em simulação 4.36b134 |
+| 20/08/2026 | Fase 2 implementada e homologada em simulação 4.36b134 (`origem=XPED`) |
+| 20/08/2026 | `xPed` inexistente reproduziu o bug; fallback por pedido pendente adicionado e homologado |
+| 21/08/2026 | Origens `xPed` de item (I05) e grupo `<entrega>` adicionadas; default do `fallback` passou a `UNICO` |
+| 21/08/2026 | Origem `INFCPL_PEDIDO` adicionada e homologada, com filtro `FORNECEDOR='S'` / `TRANSPORTADORA='N'` |
 
 ---
 
